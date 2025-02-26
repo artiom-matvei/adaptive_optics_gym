@@ -250,7 +250,7 @@ class ALGORITHM:
 
                 # The action of Shack-Hartmann is generated through the environment.
                 if self.algorithm_name == 'SHACK':
-                    action, log_prob = self.env.SH_step()                  # getting next action from Shack-Hartmann
+                    action, log_prob = self.env.unwrapped.SH_step()                  # getting next action from Shack-Hartmann
 
                 else:
                     action, log_prob = self.actor.get_action(obs, self.cov_mat)     # getting next action from actor

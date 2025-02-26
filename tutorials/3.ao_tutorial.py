@@ -399,3 +399,6 @@ anim.close()
 # Show created animation
 anim
 # %%
+strehl = get_strehl_from_focal(long_exposure, unaberrated_PSF * wf_wfs.total_power)
+
+print('Strehl = %.1f%%' % (strehl * 100))
