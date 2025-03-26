@@ -8,6 +8,7 @@ from hcipy import (
     ModeBasis,
     Wavefront,
     imshow_field,
+    inverse_tikhonov,
     make_disk_harmonic_basis,
     make_focal_grid,
     make_pupil_grid,
@@ -85,6 +86,16 @@ class Telescope:
         self.unaberrated_PSF = self.propagator.forward(self.wf_sci).power
 
 
+class State:
+    def __init__(self, deformable_mirror, wf_wfs_on_wfs):
+        self.deformable_mirror = deformable_mirror
+        self.wf_wfs_on_wfs = wf_wfs_on_wfs
+
+    def update_state(self, deformable_mirror, wf_wfs_on_wfs):
+        self.deformable_mirror = deformable_mirror
+        self.wf_wfs_on_wfs = wf_wfs_on_wfs
+
+
 class AOEnvArtiom(gym.Env):
     metadata = {
         "wfs_modes": [PYRAMID_WFS, SH_WFS],
@@ -109,7 +120,7 @@ class AOEnvArtiom(gym.Env):
         self.camera = self.get_wfs_camera()
 
         # defining the DM controls
-        self.num_modes = 500
+        self.num_modes = 100
 
         dm_modes = make_disk_harmonic_basis(
             self.telescope.pupil_grid,
@@ -121,9 +132,60 @@ class AOEnvArtiom(gym.Env):
             [mode / np.ptp(mode) for mode in dm_modes], self.telescope.pupil_grid
         )
         self.deformable_mirror = DeformableMirror(dm_modes)
-        
+
         # reconstruction matrix
         # TODO: this should be computed from the DM modes
+        # this can be achieved by poking each mode and measuring its influence on the WFS
+        # there is a tutorial that help in achieving this, see RLAO - overleaf
+
+        ########## for now, put code as is here, later move it to fxn below
+        # self.recontruction_matrix = self.get_reconstruction_matrix()
+        wf = Wavefront(self.telescope.VLT_aperture, self.telescope.wavelength_wfs)
+        wf.total_power = 1
+
+        self.camera.integrate(self.wfs.forward(wf), 1)
+
+        self.image_ref = self.camera.read_out()
+        self.image_ref /= self.image_ref.sum()
+
+        imshow_field(self.image_ref)
+        plt.colorbar()
+        plt.show()
+
+        probe_amp = 0.01 * self.telescope.wavelength_wfs
+        slopes = []
+
+        wf = Wavefront(self.telescope.VLT_aperture, self.telescope.wavelength_wfs)
+        wf.total_power = 1
+
+        for ind in range(dm_modes.num_modes):
+            if ind % 10 == 0:
+                print(f"Measure response to mode {ind + 1} / {dm_modes.num_modes}")
+            slope = 0
+
+            # Probe the phase response
+            for s in [1, -1]:
+                amp = np.zeros((dm_modes.num_modes,))
+                amp[ind] = s * probe_amp
+                self.deformable_mirror.actuators = amp
+
+                dm_wf = self.deformable_mirror.forward(wf)
+                wfs_wf = self.wfs.forward(dm_wf)
+
+                self.camera.integrate(wfs_wf, 1)
+                image = self.camera.read_out()
+                image /= np.sum(image)
+
+                slope += s * (image - self.image_ref) / (2 * probe_amp)
+
+            slopes.append(slope)
+
+        slopes = ModeBasis(slopes)
+
+        rcond = 1e-3
+        self.reconstruction_matrix = inverse_tikhonov(
+            slopes.transformation_matrix, rcond=rcond, svd=None
+        )
 
         # atmosphere parameters definition
         self.seeing = 0.6  # arcsec@500nm (convention)
@@ -149,7 +211,7 @@ class AOEnvArtiom(gym.Env):
         #              high=#wfs measurement
         #                  )
 
-    def reset(self):
+    def reset(self, deformable_mirror_flat=True):
         # probably all this will end up in the __init__ method
         # 1. create the pupil grid
         # 1.1create the aperture (field)
@@ -157,7 +219,9 @@ class AOEnvArtiom(gym.Env):
         # 3. create the propagator
         # 4. create the DM
         self.layer.reset()
-        self.deformable_mirror.flatten()
+        self.deformable_mirror.flatten() if deformable_mirror_flat is True else self.deformable_mirror.random(
+            0.2 * self.telescope.wavelength_wfs
+        )
         wf_wfs_after_atmos = (
             self.layer(self.telescope.wf_wfs)
             if self.atmospheric_turbulence
@@ -167,10 +231,18 @@ class AOEnvArtiom(gym.Env):
         wf_wfs_after_dm = self.deformable_mirror(wf_wfs_after_atmos)
 
         self.wf_wfs_on_wfs = self.get_wf_on_wfs(wf_wfs_after_dm)
-        pass
 
-    def step(self, action: Union[float, int]):
+        state = State(self.deformable_mirror.actuators, self.wf_wfs_on_wfs)
+
+        return state, {}
+
+    def step(self, action: Union[float, int, np.ndarray]):
         # next time step of actuator state
+        assert (
+            action.shape == self.deformable_mirror.actuators.shape
+            if isinstance(action, np.ndarray)
+            else True
+        )
         self.deformable_mirror.actuators[0] += 0.0000001 * action
 
         # next time step of atmosphere state
@@ -324,3 +396,6 @@ class AOEnvArtiom(gym.Env):
         else:
             raise ValueError(f"Incorrect self.wfs_mode argument: {self.wfs_mode}")
         return wf_wfs_on_wfs
+
+    def get_reconstruction_matrix(self):
+        pass
