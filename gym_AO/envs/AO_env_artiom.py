@@ -7,36 +7,30 @@ import numpy as np
 PYRAMID_WFS = "pwfs"
 SH_WFS = "shwfs"
 
-class AOEnvArtiom(gym.Env):
-    metadata = {
-        "wfs_modes": [PYRAMID_WFS, SH_WFS],
-        "atmospheric_turbulence": [True, False],
-        "render_modes": ["actuators", "aperture", "atmosphere", "PSF", "WFS"],
-        "render_fps": 4,
-    }
 
-    def __init__(self, wfs_mode=SH_WFS, atmospheric_turbulence=True):
-
-        super(AOEnvArtiom, self).__init__()
-
-        assert wfs_mode in self.metadata["wfs_modes"]
-        self.wfs_mode = wfs_mode
-
-        assert atmospheric_turbulence in self.metadata["atmospheric_turbulence"]
-        self.atmospheric_turbulence = atmospheric_turbulence
-
+class Telescope:
+    def __init__(
+        self,
+        telescope_diameter = 8.0,
+        central_obscuration = 1.2,
+        spider_width = 0.05,
+        oversizing_factor = 16 / 15,
+    ):
         # telescope parameters definition
-        self.telescope_diameter = 8.0  # meter
-        self.central_obscuration = 1.2  # meter
+        self.telescope_diameter = telescope_diameter  # meter
+
+        self.central_obscuration = central_obscuration  # meter
         self.central_obscuration_ratio = (
             self.central_obscuration / self.telescope_diameter
         )
-        self.spider_width = 0.05  # meter
-        self.oversizing_factor = 16 / 15
+        self.spider_width = spider_width  # meter
+        self.oversizing_factor = oversizing_factor
 
         # pupil grid definition
         self.num_pupil_pixels = 240 * self.oversizing_factor
-        self.pupil_grid_diameter = self.telescope_diameter * self.oversizing_factor
+        self.pupil_grid_diameter = (
+            self.telescope_diameter * self.oversizing_factor
+        )
         self.pupil_grid = make_pupil_grid(
             self.num_pupil_pixels, self.pupil_grid_diameter
         )
@@ -91,6 +85,59 @@ class AOEnvArtiom(gym.Env):
         )
         self.deformable_mirror = DeformableMirror(dm_modes)
 
+
+class AOEnvArtiom(gym.Env):
+    metadata = {
+        "wfs_modes": [PYRAMID_WFS, SH_WFS],
+        "atmospheric_turbulence": [True, False],
+        "render_modes": ["actuators", "aperture", "atmosphere", "PSF", "WFS"],
+        "render_fps": 4,
+    }
+
+    def __init__(self, wfs_mode=SH_WFS, atmospheric_turbulence=True):
+
+        super(AOEnvArtiom, self).__init__()
+
+        assert wfs_mode in self.metadata["wfs_modes"]
+        self.wfs_mode = wfs_mode
+
+        assert atmospheric_turbulence in self.metadata["atmospheric_turbulence"]
+        self.atmospheric_turbulence = atmospheric_turbulence
+        self.telescope = Telescope()
+
+        # incoming wavefront
+        self.telescope.wf_sci = Wavefront(self.telescope.VLT_aperture, self.telescope.wavelength_sci)
+        self.telescope.wf_sci.total_power = 1
+
+        # focal grid definition and propagator
+        spatial_resolution = self.telescope.wavelength_sci / self.telescope.telescope_diameter
+        self.focal_grid = make_focal_grid(
+            q=4, num_airy=30, spatial_resolution=spatial_resolution
+        )
+
+        self.propagator = FraunhoferPropagator(self.telescope.pupil_grid, self.focal_grid)
+
+        self.unaberrated_PSF = self.propagator.forward(self.telescope.wf_sci).power
+
+        ########## This part can be probably abstracted away
+        ########## SHWFS setup
+
+        self.camera = self.get_wfs_camera()
+
+        # defining the DM controls
+        self.num_modes = 500
+
+        dm_modes = make_disk_harmonic_basis(
+            self.telescope.pupil_grid,
+            num_modes=self.num_modes,
+            D=self.telescope.telescope_diameter,
+            bc="neumann",
+        )
+        dm_modes = ModeBasis(
+            [mode / np.ptp(mode) for mode in dm_modes], self.telescope.pupil_grid
+        )
+        self.deformable_mirror = DeformableMirror(dm_modes)
+
         # atmosphere parameters definition
         self.seeing = 0.6  # arcsec@500nm (convention)
         self.outer_scale = 40  # meter
@@ -102,7 +149,7 @@ class AOEnvArtiom(gym.Env):
         self.velocity = 0.314 * self.fried_parameter / self.tau0
 
         self.layer = InfiniteAtmosphericLayer(
-            self.pupil_grid, self.Cn_squared, self.outer_scale, self.velocity
+            self.telescope.pupil_grid, self.Cn_squared, self.outer_scale, self.velocity
         )
 
         self.action_space = gym.spaces.Discrete(
@@ -124,9 +171,16 @@ class AOEnvArtiom(gym.Env):
         # 4. create the DM
         self.layer.reset()
         self.deformable_mirror.flatten()
+        wf_wfs_after_atmos = (
+            self.layer(self.telescope.wf_wfs) if self.atmospheric_turbulence else self.telescope.wf_wfs
+        )
+
+        wf_wfs_after_dm = self.deformable_mirror(wf_wfs_after_atmos)
+
+        self.wf_wfs_on_wfs = self.get_wf_on_wfs(wf_wfs_after_dm)
         pass
 
-    def step(self, action: Union[float,int]):
+    def step(self, action: Union[float, int]):
         # next time step of actuator state
         self.deformable_mirror.actuators[0] += 0.0000001 * action
 
@@ -134,10 +188,15 @@ class AOEnvArtiom(gym.Env):
         self.layer.t += self.delta_t
 
         # propagate through atmosphere and deformable mirror
-        # wf_wfs_after_atmos = self.layer(self.wf_wfs)
-        # wf_wfs_after_dm = self.deformable_mirror(wf_wfs_after_atmos)
+        # a. for wfs wf
+        wf_wfs_after_atmos = (
+            self.layer(self.telescope.wf_wfs) if self.atmospheric_turbulence else self.telescope.wf_wfs
+        )
 
-        # wf_wfs_on_sh = self.shwfs(self.magnifier(wf_wfs_after_dm))
+        wf_wfs_after_dm = self.deformable_mirror(wf_wfs_after_atmos)
+        self.wf_wfs_on_wfs = self.get_wf_on_wfs(wf_wfs_after_dm)
+
+        # b. for sci wf
 
         return 1, self.reward(), False, False, {}
 
@@ -146,14 +205,14 @@ class AOEnvArtiom(gym.Env):
 
         # if mode == 'aperture':
         plt.subplot(2, 3, 1)
-        imshow_field(self.VLT_aperture, cmap="gray")
+        imshow_field(self.telescope.VLT_aperture, cmap="gray")
         plt.xlabel("x position(m)")
         plt.ylabel("y position(m)")
         plt.title("Aperture plot")
 
         # elif mode == 'atmosphere':
         plt.subplot(2, 3, 2)
-        phase_screen_phase = self.layer.phase_for(self.wavelength_wfs)
+        phase_screen_phase = self.layer.phase_for(self.telescope.wavelength_wfs)
         imshow_field(phase_screen_phase, cmap="RdBu")
         # plt.colorbar()
         plt.title("Atmospheric Phase Screen")
@@ -161,13 +220,10 @@ class AOEnvArtiom(gym.Env):
         # elif mode == 'WFS':
         plt.subplot(2, 3, 3)
         # propagate through atmosphere and deformable mirror
-        wf_wfs_after_atmos = self.layer(self.wf_wfs) if self.atmospheric_turbulence else self.wf_wfs  
-        wf_wfs_after_dm = self.deformable_mirror(wf_wfs_after_atmos)
-        wf_wfs_on_wfs = self.get_wf_on_wfs(wf_wfs_after_dm)
 
-        self.camera.integrate(wf_wfs_on_wfs, 1)
+        self.camera.integrate(self.wf_wfs_on_wfs, 1)
         image_ref = self.camera.read_out()
-        # it look slike the PWFS is normalized with like follows 
+        # it look slike the PWFS is normalized with like follows
         image_ref /= image_ref.sum() if self.wfs_mode == PYRAMID_WFS else 1
         plt.title("WFS plot")
         imshow_field(image_ref, cmap="inferno")
@@ -178,7 +234,7 @@ class AOEnvArtiom(gym.Env):
         wf_sci_focal_plane = self.propagator(
             self.deformable_mirror(
                 # self.layer(
-                self.wf_sci
+                self.telescope.wf_sci
             )
             # )
         )
@@ -203,7 +259,7 @@ class AOEnvArtiom(gym.Env):
             cmap="RdBu",
             vmin=-2,
             vmax=2,
-            mask=self.VLT_aperture,
+            mask=self.telescope.VLT_aperture,
         )
         # plt.colorbar()
 
@@ -213,12 +269,12 @@ class AOEnvArtiom(gym.Env):
     def reward(self):
         # we need to look at the wf_sci after the atmosphere and after the DM
         wf_sci_focal_plane = self.propagator(
-            self.deformable_mirror(self.layer(self.wf_sci))
+            self.deformable_mirror(self.layer(self.telescope.wf_sci))
         )
 
         strehl_ratio = (
             get_strehl_from_focal(
-                wf_sci_focal_plane.power, self.unaberrated_PSF * self.wf_wfs.total_power
+                wf_sci_focal_plane.power, self.unaberrated_PSF * self.telescope.wf_wfs.total_power
             )
             * 100
         )
@@ -231,33 +287,33 @@ class AOEnvArtiom(gym.Env):
             num_lenslets = 40  # 40 lenslets along one diameter
             sh_diameter = 5e-3
 
-            magnification = sh_diameter / self.telescope_diameter
+            magnification = sh_diameter / self.telescope.telescope_diameter
             # we add magnification to the shwfs because its spatial diameter is smaller than the telescopes and we need them to correspond in order to view the aberrations at the right place on the pupil
             self.magnifier = Magnifier(magnification=magnification)
 
             self.wfs = SquareShackHartmannWavefrontSensorOptics(
-                input_grid=self.pupil_grid.scaled(magnification),
+                input_grid=self.telescope.pupil_grid.scaled(magnification),
                 f_number=f_number,
                 num_lenslets=num_lenslets,
                 pupil_diameter=sh_diameter,
             )
-            
+
             # it is currently not used, see tuto #3 for how and when to use it
             self.wfse = ShackHartmannWavefrontSensorEstimator(
                 mla_grid=self.wfs.mla_grid,
                 mla_index=self.wfs.micro_lens_array.mla_index,
-            ) 
+            )
             camera = NoiselessDetector(detector_grid=self.focal_grid)
             return camera
         elif self.wfs_mode == PYRAMID_WFS:
 
-            pwfs_grid = make_pupil_grid(120, 2 * self.pupil_grid_diameter)
+            pwfs_grid = make_pupil_grid(120, 2 * self.telescope.pupil_grid_diameter)
             self.wfs = PyramidWavefrontSensorOptics(
-                self.pupil_grid,
+                self.telescope.pupil_grid,
                 pwfs_grid,
-                separation=self.pupil_grid_diameter,
-                pupil_diameter=self.telescope_diameter,
-                wavelength_0=self.wavelength_wfs,
+                separation=self.telescope.pupil_grid_diameter,
+                pupil_diameter=self.telescope.telescope_diameter,
+                wavelength_0=self.telescope.wavelength_wfs,
                 q=3,
             )
 
@@ -268,7 +324,8 @@ class AOEnvArtiom(gym.Env):
 
     def get_wf_on_wfs(self, wf_wfs_after_dm):
         """
-        this is supposed to be after atmosphere and deformable mirror, and right before projecting onto the wfs"""
+        this is supposed to be after atmosphere and deformable mirror, and right before projecting onto the wfs
+        """
         if self.wfs_mode == SH_WFS:
             wf_wfs_on_wfs = self.wfs(self.magnifier(wf_wfs_after_dm))
         elif self.wfs_mode == PYRAMID_WFS:
@@ -276,5 +333,3 @@ class AOEnvArtiom(gym.Env):
         else:
             raise ValueError(f"Incorrect self.wfs_mode argument: {self.wfs_mode}")
         return wf_wfs_on_wfs
-            
-  

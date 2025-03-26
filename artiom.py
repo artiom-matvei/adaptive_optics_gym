@@ -19,9 +19,9 @@
 #         print(reward)
 
 from gym_AO.envs import AO_env_artiom
-env = AO_env_artiom.AOEnvArtiom(wfs_mode=AO_env_artiom.PYRAMID_WFS, atmospheric_turbulence=False)
+env = AO_env_artiom.AOEnvArtiom(wfs_mode=AO_env_artiom.PYRAMID_WFS, atmospheric_turbulence=True)
 env.reset()
 for i in range(1000):
-    env.render() if i%10 else True
-    env.step(0)
-    print(i) if i%10 == 0 else True
+    env.render() if i%10 == 0 else True
+    _, reward, _, _, _ = env.step(0)
+    print(f"step: {i}, reward: {reward}") if i%10 == 0 else True
