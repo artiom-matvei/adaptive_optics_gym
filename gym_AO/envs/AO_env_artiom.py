@@ -48,7 +48,7 @@ class Telescope:
         self.oversizing_factor = oversizing_factor
 
         # pupil grid definition
-        self.num_pupil_pixels = 240 * self.oversizing_factor
+        self.num_pupil_pixels = 240 # * self.oversizing_factor
         self.pupil_grid_diameter = self.telescope_diameter * self.oversizing_factor
         self.pupil_grid = make_pupil_grid(
             self.num_pupil_pixels, self.pupil_grid_diameter
@@ -152,7 +152,7 @@ class AOEnvArtiom(gym.Env):
         plt.colorbar()
         plt.show()
 
-        probe_amp = 0.01 * self.telescope.wavelength_wfs
+        probe_amp = 0.1 * self.telescope.wavelength_wfs
         slopes = []
 
         wf = Wavefront(self.telescope.VLT_aperture, self.telescope.wavelength_wfs)
@@ -267,7 +267,7 @@ class AOEnvArtiom(gym.Env):
         return 1, self.reward(), False, False, {}
 
     def render(self):
-        plt.ion()
+        # plt.ion()
 
         # if mode == 'aperture':
         plt.subplot(2, 3, 1)
@@ -329,8 +329,10 @@ class AOEnvArtiom(gym.Env):
         )
         # plt.colorbar()
 
-        plt.draw()
-        plt.pause(0.00001)
+        # plt.draw()
+        # plt.pause(0.00001)
+        fig = plt.gcf()
+        return fig
 
     def reward(self):
         # we need to look at the wf_sci after the atmosphere and after the DM
@@ -373,7 +375,10 @@ class AOEnvArtiom(gym.Env):
             camera = NoiselessDetector(detector_grid=self.telescope.focal_grid)
             return camera
         elif self.wfs_mode == PYRAMID_WFS:
-            pwfs_grid = make_pupil_grid(120, 2 * self.telescope.pupil_grid_diameter)
+            # dims needs to be twise the num_pupil_pixels which is currently ~240
+            # let's change from 120 to 240 and see what happes
+            # the resolution becomes better but the relative size is the same
+            pwfs_grid = make_pupil_grid(240, 2 * self.telescope.pupil_grid_diameter)
             self.wfs = PyramidWavefrontSensorOptics(
                 self.telescope.pupil_grid,
                 pwfs_grid,
@@ -401,4 +406,4 @@ class AOEnvArtiom(gym.Env):
         return wf_wfs_on_wfs
 
     def get_reconstruction_matrix(self):
-        pass
+        return self.reconstruction_matrix

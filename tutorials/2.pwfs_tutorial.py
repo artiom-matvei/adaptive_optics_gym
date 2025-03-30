@@ -1,4 +1,4 @@
-#%%
+# %%
 from hcipy import *
 import numpy as np
 import matplotlib.pyplot as plt
@@ -33,7 +33,14 @@ influence_functions = make_gaussian_influence_functions(pupil_grid, num_actuator
 deformable_mirror = DeformableMirror(influence_functions)
 num_modes = deformable_mirror.num_actuators
 # %%
-pwfs = PyramidWavefrontSensorOptics(pupil_grid, pwfs_grid, separation=pupil_grid_diameter, pupil_diameter=telescope_diameter, wavelength_0=wavelength_wfs, q=3)
+pwfs = PyramidWavefrontSensorOptics(
+    pupil_grid,
+    pwfs_grid,
+    separation=pupil_grid_diameter,
+    pupil_diameter=telescope_diameter,
+    wavelength_0=wavelength_wfs,
+    q=3,
+)
 camera = NoiselessDetector(pwfs_grid)
 # %%
 wf = Wavefront(magellan_aperture, wavelength_wfs)
@@ -86,7 +93,7 @@ slopes = ModeBasis(slopes)
 # The multiplication of A and a yields the wavefront sensor response:
 # S = A * a
 
-# Note that we want a certain WFS measurement S'. 
+# Note that we want a certain WFS measurement S'.
 # To recover it, we can invert the interaction matrix A as below by using regularization techniques ensuring the invertability.
 # a = (A^T A)^{-1} A^T S
 
@@ -114,7 +121,7 @@ PSF_in = prop(deformable_mirror.forward(wf)).power
 
 imshow_psf(PSF_in / norm, vmax=1, vmin=1e-5, spatial_resolution=spatial_resolution)
 plt.show()
-#%%
+# %%
 plt.plot(deformable_mirror.actuators)
 plt.xlabel('Index')
 plt.ylabel('Value')
