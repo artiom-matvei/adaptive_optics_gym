@@ -18,6 +18,7 @@
 #         print(i)
 #         print(reward)
 
+import datetime
 import IPython
 from hcipy import Wavefront, imshow_field, large_poisson
 from matplotlib import animation, pyplot as plt
@@ -29,7 +30,7 @@ env.render()
 
 leakage = 0.01
 gain = 0.5
-
+#%%
 def create_closed_loop_animation():
 
     wf_ref = Wavefront(env.telescope.VLT_aperture, env.telescope.wavelength_wfs)
@@ -60,8 +61,9 @@ def create_closed_loop_animation():
         wfs_image /= np.sum(wfs_image)
 
         diff_image = wfs_image-env.image_ref
-        env.deformable_mirror.actuators = (1-leakage) * env.deformable_mirror.actuators - gain * env.reconstruction_matrix.dot(diff_image)
-
+        env.step(action=(1-leakage) * env.deformable_mirror.actuators - gain * env.reconstruction_matrix.dot(diff_image))
+        # env.deformable_mirror.actuators = (1-leakage) * env.deformable_mirror.actuators - gain * env.reconstruction_matrix.dot(diff_image)
+        env.render()
         phase = env.telescope.VLT_aperture * env.deformable_mirror.surface
         phase -= np.mean(phase[env.telescope.VLT_aperture>0])
 
@@ -72,17 +74,15 @@ def create_closed_loop_animation():
 
         return [im1, im2, im3]
 
-    num_time_steps=21
+    num_time_steps=41
     time_steps = np.arange(num_time_steps)
     anim = animation.FuncAnimation(fig, animate, time_steps, interval=160, blit=True)
-    return IPython.display.HTML(anim.to_jshtml(default_mode='loop'))
+    anim.save(f"exps/anim-{datetime.datetime.now()}.mp4")
+    # return IPython.display.HTML(anim.to_jshtml(default_mode='loop'))
 
-create_closed_loop_animation() # this needs to be changed to save to file as currently it is not working
-
-reconstruction_matrix = env.reconstruction_matrix
-print(reconstruction_matrix)
-for i in range(1000):
-    env.render() if i%10 == 0 else True
-    _, reward, _, _, _ = env.step(0)
-    print(f"step: {i}, reward: {reward}") if i%10 == 0 else True
-
+#%%
+env.render() # env.render is correct, maybe problem with the animation
+# see /Users/artiommatvei/Projects/ao/adaptive_optics_gym/exps/screenshot-of-broken-animation.png
+# vs /Users/artiommatvei/Projects/ao/adaptive_optics_gym/exps/env.render-is-correct.png
+env.reset(deformable_mirror_flat=False)
+create_closed_loop_animation()

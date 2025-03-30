@@ -243,7 +243,10 @@ class AOEnvArtiom(gym.Env):
             if isinstance(action, np.ndarray)
             else True
         )
-        self.deformable_mirror.actuators[0] += 0.0000001 * action
+        if isinstance(action, (int, float)):
+            self.deformable_mirror.actuators[0] += 0.0000001 * action
+        else:
+            self.deformable_mirror.actuators = action
 
         # next time step of atmosphere state
         self.layer.t += self.delta_t
