@@ -299,10 +299,10 @@ class AOEnvArtiom(gym.Env):
         plt.title("Point Spread Function")
         wf_sci_focal_plane = self.telescope.propagator(
             self.deformable_mirror(
-                # self.layer(
-                self.telescope.wf_sci
+                self.layer(self.telescope.wf_sci)
+                if self.atmospheric_turbulence
+                else self.telescope.wf_sci
             )
-            # )
         )
         imshow_field(
             np.log10(wf_sci_focal_plane.power / wf_sci_focal_plane.power.max()),
