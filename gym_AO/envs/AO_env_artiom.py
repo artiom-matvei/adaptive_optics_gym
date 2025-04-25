@@ -201,15 +201,28 @@ class AOEnvArtiom(gym.Env):
             self.telescope.pupil_grid, self.Cn_squared, self.outer_scale, self.velocity
         )
 
-        self.action_space = gym.spaces.Discrete(
-            1
-        )  # TODO: this should be eventually fixed to be the actual actions provided by the DM
-        self.observation_space = gym.spaces.Discrete(
-            1
-        )  # TODO: this eventually be fixed to be the WFS observations
-        # gym.spaces.Box(low=#wfs measurement
-        #              high=#wfs measurement
-        #                  )
+        # Calculate observation space size based on WFS mode
+        if self.wfs_mode == SH_WFS:
+            # For SH WFS, the observation is the slopes from the lenslet array
+            # BUG: probably wrong, we don't ned SH_WFS for now
+            obs_size = self.wfs.mla_grid.size
+        else:  # PYRAMID_WFS
+            # For Pyramid WFS, the observation is the camera image
+            obs_size = self.camera.detector_grid.dims
+
+        self.observation_space = gym.spaces.Box(
+            low=0,
+            high=np.inf,
+            shape=obs_size,
+            dtype=np.float64
+        )
+
+        self.action_space = gym.spaces.Box(
+            low=-1.0,
+            high=1.0,
+            shape=(self.num_modes,),
+            dtype=np.float64
+        )
 
     def reset(self, deformable_mirror_flat=True):
         # probably all this will end up in the __init__ method
