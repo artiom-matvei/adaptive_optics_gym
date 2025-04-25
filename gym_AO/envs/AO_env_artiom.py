@@ -120,7 +120,7 @@ class AOEnvArtiom(gym.Env):
         self.camera = self.get_wfs_camera()
 
         # defining the DM controls
-        self.num_modes = 100
+        self.num_modes = 10
 
         dm_modes = make_disk_harmonic_basis(
             self.telescope.pupil_grid,
@@ -224,7 +224,7 @@ class AOEnvArtiom(gym.Env):
             dtype=np.float64
         )
 
-    def reset(self, deformable_mirror_flat=True):
+    def reset(self, deformable_mirror_flat=True, seed=0):
         # probably all this will end up in the __init__ method
         # 1. create the pupil grid
         # 1.1create the aperture (field)
@@ -245,9 +245,11 @@ class AOEnvArtiom(gym.Env):
 
         self.wf_wfs_on_wfs = self.get_wf_on_wfs(wf_wfs_after_dm)
 
-        state = State(self.deformable_mirror.actuators, self.wf_wfs_on_wfs)
+        # PLB: concatenate as a vector, 
+        self.camera.integrate(self.wf_wfs_on_wfs, 1)
+        obs = self.camera.read_out()
 
-        return state, {}
+        return obs, {}
 
     def step(self, action: Union[float, int, np.ndarray]):
         # next time step of actuator state
@@ -256,10 +258,10 @@ class AOEnvArtiom(gym.Env):
             if isinstance(action, np.ndarray)
             else True
         )
-        if isinstance(action, (int, float)):
-            self.deformable_mirror.actuators[0] += 0.0000001 * action
-        else:
-            self.deformable_mirror.actuators = action
+        # if isinstance(action, (int, float)):
+        #     self.deformable_mirror.actuators[0] += 0.0000001 * action
+        # else:
+        self.deformable_mirror.actuators = action
 
         # next time step of atmosphere state
         self.layer.t += self.delta_t
@@ -273,11 +275,13 @@ class AOEnvArtiom(gym.Env):
         )
 
         wf_wfs_after_dm = self.deformable_mirror(wf_wfs_after_atmos)
+        # BUG: we might need to use fxn .forward() from get_wf_on_wfs
         self.wf_wfs_on_wfs = self.get_wf_on_wfs(wf_wfs_after_dm)
 
-        # b. for sci wf
+        self.camera.integrate(self.wf_wfs_on_wfs, 1)
+        obs = self.camera.read_out()
 
-        return 1, self.reward(), False, False, {}
+        return obs, self.reward(), False, {}
 
     def render(self):
         # plt.ion()
