@@ -8,6 +8,7 @@ import numpy as np
 from exps_code.reconstruction.reconstruction_experiment import randomize_actuators
 from gym_AO.envs import AO_env_artiom
 from matplotlib.animation import FuncAnimation
+import os
 
 env = AO_env_artiom.AOEnvArtiom(
     wfs_mode=AO_env_artiom.PYRAMID_WFS, atmospheric_turbulence=False
@@ -65,9 +66,13 @@ for leakage, gain, atmospheric_turbulence, reconstruction_method in itertools.pr
 
     animation = animate_ao_system(env)
 
+    # Create output directory if it doesn't exist
+    output_dir = "exps/reconstruction/strehl_ratio"
+    os.makedirs(output_dir, exist_ok=True)
+
     # Save the animation
     animation.save(
-        f"exps/reconstruction/strehl_ratio/{gain}-{leakage}-lin:{reconstruction_method}-turb:{atmospheric_turbulence}-{num_frames}-{datetime.datetime.now()}.mp4",
+        f"{output_dir}/{gain}-{leakage}-lin:{reconstruction_method}-turb:{atmospheric_turbulence}-{num_frames}-{datetime.datetime.now()}.mp4",
         writer="ffmpeg",
     ) 
 # %%
