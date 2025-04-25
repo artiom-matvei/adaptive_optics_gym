@@ -148,9 +148,9 @@ class AOEnvArtiom(gym.Env):
         self.image_ref = self.camera.read_out()
         self.image_ref /= self.image_ref.sum()
 
-        imshow_field(self.image_ref)
-        plt.colorbar()
-        plt.show()
+        # imshow_field(self.image_ref)
+        # plt.colorbar()
+        # plt.show()
 
         probe_amp = 0.1 * self.telescope.wavelength_wfs
         slopes = []
@@ -268,6 +268,7 @@ class AOEnvArtiom(gym.Env):
 
     def render(self):
         # plt.ion()
+        strehl_ratio = self.reward()
 
         # if mode == 'aperture':
         plt.subplot(2, 3, 1)
@@ -291,7 +292,7 @@ class AOEnvArtiom(gym.Env):
         image_ref = self.camera.read_out()
         # it look slike the PWFS is normalized with like follows
         image_ref /= image_ref.sum() if self.wfs_mode == PYRAMID_WFS else 1
-        plt.title("WFS plot")
+        plt.title(f"WFS plot\nStrehl Ratio: {strehl_ratio:.2f}")
         imshow_field(image_ref, cmap="inferno")
 
         # elif mode == "PSF":
@@ -337,13 +338,17 @@ class AOEnvArtiom(gym.Env):
     def reward(self):
         # we need to look at the wf_sci after the atmosphere and after the DM
         wf_sci_focal_plane = self.telescope.propagator(
-            self.deformable_mirror(self.layer(self.telescope.wf_sci))
+            self.deformable_mirror(
+                self.layer(self.telescope.wf_sci) 
+                if self.atmospheric_turbulence 
+                else self.telescope.wf_sci
+            )
         )
 
         strehl_ratio = (
             get_strehl_from_focal(
                 wf_sci_focal_plane.power,
-                self.telescope.unaberrated_PSF * self.telescope.wf_wfs.total_power,
+                self.telescope.unaberrated_PSF * self.telescope.wf_sci.total_power,
             )
             * 100
         )

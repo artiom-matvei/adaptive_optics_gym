@@ -16,14 +16,17 @@ state, _ = env.reset(deformable_mirror_flat=False)
 
 
 INITIAL_ACTUATORS = randomize_actuators(env)
-
-leakage_list = [0.1]#, 0.01] # biases actions towards zero, is it necessary?
-gain_list = [0.25]#, 0.5, 1]
-reconstruction_method = True
 #%%
-for leakage, gain in itertools.product(leakage_list, gain_list):
+leakage_list = [0.1]#, 0.01] # biases actions towards zero, is it necessary?, best result in no_turb is 0.1
+gain_list = [0.25]#, 0.5, 1] # best result in no_turb is 0.25
+reconstruction_method_list = [True]#, False]
+num_frames = 100
+atmospheric_turbulence_list = [True]#, False]
+#%%
+for leakage, gain, atmospheric_turbulence, reconstruction_method in itertools.product(leakage_list, gain_list, atmospheric_turbulence_list, reconstruction_method_list):
+    env.atmospheric_turbulence = atmospheric_turbulence
 
-    def animate_ao_system(env, num_frames=50):
+    def animate_ao_system(env, num_frames=num_frames):
         fig = env.render()
 
         def update(frame):
@@ -64,7 +67,7 @@ for leakage, gain in itertools.product(leakage_list, gain_list):
 
     # Save the animation
     animation.save(
-        f"exps/reconstruction/no_turb/anim-{gain}-{leakage}-{datetime.datetime.now()}.mp4",
+        f"exps/reconstruction/strehl_ratio/{gain}-{leakage}-lin:{reconstruction_method}-turb:{atmospheric_turbulence}-{num_frames}-{datetime.datetime.now()}.mp4",
         writer="ffmpeg",
-    )
+    ) 
 # %%
