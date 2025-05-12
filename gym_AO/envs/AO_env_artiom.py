@@ -1,4 +1,8 @@
-from typing import Union
+import hashlib
+import json
+import os
+import pickle
+from typing import Tuple, Union
 import gymnasium as gym
 from hcipy import (
     Cn_squared_from_fried_parameter,
@@ -120,7 +124,7 @@ class AOEnvArtiom(gym.Env):
         self.camera = self.get_wfs_camera()
 
         # defining the DM controls
-        self.num_modes = 10
+        self.num_modes = 100
 
         dm_modes = make_disk_harmonic_basis(
             self.telescope.pupil_grid,
@@ -138,54 +142,8 @@ class AOEnvArtiom(gym.Env):
         # this can be achieved by poking each mode and measuring its influence on the WFS
         # there is a tutorial that help in achieving this, see RLAO - overleaf
 
-        ########## for now, put code as is here, later move it to fxn below
-        # self.recontruction_matrix = self.get_reconstruction_matrix()
-        wf = Wavefront(self.telescope.VLT_aperture, self.telescope.wavelength_wfs)
-        wf.total_power = 1
-
-        self.camera.integrate(self.wfs.forward(wf), 1)
-
-        self.image_ref = self.camera.read_out()
-        self.image_ref /= self.image_ref.sum()
-
-        # imshow_field(self.image_ref)
-        # plt.colorbar()
-        # plt.show()
-
-        probe_amp = 0.1 * self.telescope.wavelength_wfs
-        slopes = []
-
-        wf = Wavefront(self.telescope.VLT_aperture, self.telescope.wavelength_wfs)
-        wf.total_power = 1
-
-        for ind in range(dm_modes.num_modes):
-            if ind % 10 == 0:
-                print(f"Measure response to mode {ind + 1} / {dm_modes.num_modes}")
-            slope = 0
-
-            # Probe the phase response
-            for s in [1, -1]:
-                amp = np.zeros((dm_modes.num_modes,))
-                amp[ind] = s * probe_amp
-                self.deformable_mirror.actuators = amp
-
-                dm_wf = self.deformable_mirror.forward(wf)
-                wfs_wf = self.wfs.forward(dm_wf)
-
-                self.camera.integrate(wfs_wf, 1)
-                image = self.camera.read_out()
-                image /= np.sum(image)
-
-                slope += s * (image - self.image_ref) / (2 * probe_amp)
-
-            slopes.append(slope)
-
-        slopes = ModeBasis(slopes)
-
-        rcond = 1e-3
-        self.reconstruction_matrix = inverse_tikhonov(
-            slopes.transformation_matrix, rcond=rcond, svd=None
-        )
+        ########## 
+        self.reconstruction_matrix, self.image_ref = self._compute_reconstruction_matrix()
 
         # atmosphere parameters definition
         self.seeing = 0.6  # arcsec@500nm (convention)
@@ -201,6 +159,17 @@ class AOEnvArtiom(gym.Env):
             self.telescope.pupil_grid, self.Cn_squared, self.outer_scale, self.velocity
         )
 
+        self.observation_space, self.action_space = self._define_spaces()
+
+    def _define_spaces(self):
+        """Returns tuple of (action_space, observation_space)"""
+        action_space = gym.spaces.Box(
+            low=-1.0,
+            high=1.0,
+            shape=(self.num_modes,),
+            dtype=np.float64
+        ) 
+
         # Calculate observation space size based on WFS mode
         if self.wfs_mode == SH_WFS:
             # For SH WFS, the observation is the slopes from the lenslet array
@@ -210,19 +179,14 @@ class AOEnvArtiom(gym.Env):
             # For Pyramid WFS, the observation is the camera image
             obs_size = self.camera.detector_grid.dims
 
-        self.observation_space = gym.spaces.Box(
+        observation_space = gym.spaces.Box(
             low=0,
             high=np.inf,
             shape=obs_size,
             dtype=np.float64
         )
 
-        self.action_space = gym.spaces.Box(
-            low=-1.0,
-            high=1.0,
-            shape=(self.num_modes,),
-            dtype=np.float64
-        )
+        return action_space, observation_space
 
     def reset(self, deformable_mirror_flat=True, seed=0):
         # probably all this will end up in the __init__ method
@@ -429,3 +393,128 @@ class AOEnvArtiom(gym.Env):
 
     def get_reconstruction_matrix(self):
         return self.reconstruction_matrix
+
+
+    def _compute_reconstruction_matrix(self):
+        """Compute the reconstruction matrix for the wavefront sensor.
+        Checks for a cached version first. If not found, computes and caches it.
+
+        Returns tuple: (reconstruction_matrix, image_ref)
+        """
+        # Define cache directory and parameters for cache key
+        cache_dir = ".cache/reconstruction_matrices"
+        os.makedirs(cache_dir, exist_ok=True)
+
+        cache_params = {
+            'wfs_mode': self.wfs_mode,
+            'num_modes': self.num_modes,
+            'wavelength_wfs': self.telescope.wavelength_wfs,
+            'telescope_diameter': self.telescope.telescope_diameter,
+            'central_obscuration': self.telescope.central_obscuration,
+            'spider_width': self.telescope.spider_width,
+            'oversizing_factor': self.telescope.oversizing_factor,
+            # Add other relevant parameters if needed
+        }
+        # Sort params for consistent hashing
+        params_string = json.dumps(cache_params, sort_keys=True)
+        cache_key = hashlib.md5(params_string.encode('utf-8')).hexdigest()
+        cache_filename = os.path.join(cache_dir, f"reconstruction_{cache_key}.pkl")
+
+        if os.path.exists(cache_filename):
+            print(f"Loading reconstruction matrix from cache: {cache_filename}")
+            try:
+                with open(cache_filename, 'rb') as f:
+                    cached_data = pickle.load(f)
+                    # Ensure loaded data is float32
+                    image_ref = cached_data['image_ref'].astype(np.float32)
+                    reconstruction_matrix = cached_data['reconstruction_matrix'] # Assuming this should remain float64 for math? Check usage.
+                # Verify shape and type after loading
+                if not isinstance(image_ref, np.ndarray) or image_ref.dtype != np.float32:
+                     raise TypeError("Cached image_ref has incorrect type or structure.")
+                # Add check for reconstruction_matrix if needed
+                print("Successfully loaded reconstruction matrix from cache.")
+                return reconstruction_matrix, image_ref
+            except Exception as e:
+                print(f"Warning: Failed to load or validate cache file {cache_filename}. Recomputing. Error: {e}")
+                # Clear potentially corrupted loaded state
+                image_ref = None
+                reconstruction_matrix = None
+
+        print("Computing reconstruction matrix...")
+        try:
+            wf = Wavefront(self.telescope.VLT_aperture, self.telescope.wavelength_wfs)
+            wf.total_power = 1
+
+            self.camera.integrate(self.wfs.forward(wf), 1)
+            # -- Robustness Change for Reference Image --
+            raw_image_ref = self.camera.read_out()
+             # Clip raw values before casting to prevent potential overflow in reference
+            max_float32 = np.finfo(np.float32).max
+            clipped_image_ref = np.clip(raw_image_ref, -max_float32, max_float32)
+            image_ref = clipped_image_ref.astype(np.float32) # Ensure float32
+            image_ref_sum = np.sum(image_ref)
+            if image_ref_sum > 1e-9: # Add epsilon check
+                image_ref /= (image_ref_sum + 1e-9) # Add epsilon
+            else:
+                print("Warning: Zero sum encountered in reference WFS image during calibration.")
+            # -- End Robustness Change --
+
+            probe_amp = 0.1 * self.telescope.wavelength_wfs
+            slopes = []
+
+            wf = Wavefront(self.telescope.VLT_aperture, self.telescope.wavelength_wfs)
+            wf.total_power = 1
+
+            for ind in range(self.deformable_mirror.num_actuators):
+                if ind % 10 == 0:
+                    print(f"Measure response to mode {ind + 1} / {self.deformable_mirror.num_actuators}")
+                slope = 0
+
+                # Probe the phase response
+                for s in [1, -1]:
+                    amp = np.zeros((self.deformable_mirror.num_actuators,))
+                    amp[ind] = s * probe_amp
+                    self.deformable_mirror.actuators = amp.astype(np.float64) # Ensure DM gets float64 if needed
+
+                    dm_wf = self.deformable_mirror.forward(wf)
+                    wfs_wf = self.wfs.forward(dm_wf)
+
+                    self.camera.integrate(wfs_wf, 1)
+                    # -- Robustness change for probe images --
+                    raw_image = self.camera.read_out()
+                    clipped_image = np.clip(raw_image, -max_float32, max_float32)
+                    image = clipped_image.astype(np.float32) # Get float32 image
+                    image_sum = np.sum(image)
+                    if image_sum > 1e-9: # Add epsilon check
+                         image /= (image_sum + 1e-9) # Add epsilon
+                    # -- End Robustness Change --
+
+                    slope += s * (image - image_ref) # image and image_ref are float32
+
+                slopes.append(slope.ravel() / (2 * probe_amp)) # slope is float32
+
+            self.deformable_mirror.flatten()
+
+            slopes_matrix = np.array(slopes).T # Shape (pixels, actuators)
+            # Reconstruction matrix computation might require float64 for stability
+            reconstruction_matrix = inverse_tikhonov(slopes_matrix.astype(np.float64), 1e-4) # Cast back for inversion?
+
+            # Cache the results (ensure image_ref is saved as float32)
+            cache_data = {
+                'image_ref': image_ref, # Already float32
+                'reconstruction_matrix': reconstruction_matrix # Keep as computed (likely float64)
+            }
+            try:
+                with open(cache_filename, 'wb') as f:
+                    pickle.dump(cache_data, f)
+                print(f"Reconstruction matrix computed and saved to cache: {cache_filename}")
+            except Exception as e:
+                print(f"Warning: Failed to save reconstruction matrix to cache {cache_filename}. Error: {e}")
+            
+            return reconstruction_matrix, image_ref
+
+        except Exception as e:
+            # Clean up potentially partial results
+            image_ref = None
+            reconstruction_matrix = None
+            raise RuntimeError(f"Failed to compute reconstruction matrix: {str(e)}")

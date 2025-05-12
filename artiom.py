@@ -22,7 +22,7 @@ leakage_list = [0.1]#, 0.01] # biases actions towards zero, is it necessary?, be
 gain_list = [0.25]#, 0.5, 1] # best result in no_turb is 0.25
 reconstruction_method_list = [True]#, False]
 num_frames = 100
-atmospheric_turbulence_list = [True]#, False]
+atmospheric_turbulence_list = [False]#True]#, False]
 #%%
 for leakage, gain, atmospheric_turbulence, reconstruction_method in itertools.product(leakage_list, gain_list, atmospheric_turbulence_list, reconstruction_method_list):
     env.atmospheric_turbulence = atmospheric_turbulence
@@ -72,7 +72,7 @@ for leakage, gain, atmospheric_turbulence, reconstruction_method in itertools.pr
 
     # Save the animation
     animation.save(
-        f"{output_dir}/{gain}-{leakage}-lin:{reconstruction_method}-turb:{atmospheric_turbulence}-{num_frames}-{datetime.datetime.now()}.mp4",
+        f"{output_dir}/{gain}-{leakage}-lin:{reconstruction_method}-turb:{atmospheric_turbulence}-actuators:{env.num_modes}-frames:{num_frames}-{datetime.datetime.now()}.mp4",
         writer="ffmpeg",
     ) 
 # %%

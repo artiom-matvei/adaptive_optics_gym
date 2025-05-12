@@ -1,3 +1,6 @@
 .ipynb_checkpoints/*
 *.mp4
 exps/*
+.cache
+.venv*
+cleanrl/*
